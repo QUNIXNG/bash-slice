@@ -1,0 +1,6 @@
+state.json
+*.state.json
+*.log
+*.png
+*.jpg
+*.jpeg
