@@ -1,0 +1,20 @@
+{
+  "name": "bash-slice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Keep shell output compact while preserving key errors and the full-output path.",
+  "pi": {
+    "extensions": [
+      "./bash-slice.ts"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QUNIXNG/bash-slice.git"
+  },
+  "homepage": "https://github.com/QUNIXNG/bash-slice#readme",
+  "bugs": {
+    "url": "https://github.com/QUNIXNG/bash-slice/issues"
+  }
+}
