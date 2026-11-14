@@ -1,5 +1,8 @@
 # bash-slice
 
+
+- 当前：`v0.1.0`
+- 最新：`v0.1.0`（[Releases](https://github.com/QUNIXNG/bash-slice/releases)）
 Pi 扩展：把过长的 bash / PowerShell 输出压成「头部 + 关键错误行 + 尾部」，减少送入模型的终端文本。
 
 ## 特点
