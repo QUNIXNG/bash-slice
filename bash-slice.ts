@@ -17,9 +17,12 @@
  * `lib/*.mjs` 走 jiti 模块缓存不刷新（2026-11-13 实测：`/slice status` 计数归零说明入口重载了，
  * 但 lib 里改的尾注文案没跟着变）。并成单文件后改逻辑 `/reload` 就够。
  *
- * 自检：`/slice selftest` —— 同时验纯函数和钩子接线，升级 pi 之后先跑这条。
+ * 自检：`/slice selftest` —— 同时验纯函数和钩子接线。
+ *       另外每次 session_start 会静默跑一次（微秒级），失败且毛病没变才弹通知，
+ *       所以升级 pi 之后不用记着手动跑；自愈后标记会自己清掉。
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { isBashToolResult, isPowerShellToolResult } from "@earendil-works/pi-coding-agent";
@@ -141,17 +144,48 @@ let fired = 0;
 let savedBytes = 0;
 let lastStats: string | null = null;
 
-function readEnabled(): boolean {
+type SliceState = { enabled?: boolean; lastPiVersion?: string | null; lastFailSignature?: string };
+
+function readState(): SliceState {
 	try {
-		return JSON.parse(readFileSync(STATE_FILE, "utf8")).enabled !== false;
+		const raw = JSON.parse(readFileSync(STATE_FILE, "utf8")) as unknown;
+		return raw && typeof raw === "object" ? (raw as SliceState) : {};
 	} catch {
-		return true;
+		return {};
 	}
 }
 
-function writeEnabled(enabled: boolean): void {
+/** 合并写回：`/slice on|off` 只动 enabled，自检只动 lastPiVersion / lastFailSignature，互不覆盖 */
+function patchState(patch: SliceState): void {
 	mkdirSync(dirname(STATE_FILE), { recursive: true });
-	writeFileSync(STATE_FILE, `${JSON.stringify({ enabled }, null, 2)}\n`);
+	writeFileSync(STATE_FILE, `${JSON.stringify({ ...readState(), ...patch }, null, 2)}\n`);
+}
+
+function readEnabled(): boolean {
+	return readState().enabled !== false;
+}
+
+function writeEnabled(enabled: boolean): void {
+	patchState({ enabled });
+}
+
+/** pi 版本：从依赖包自己的 package.json 读，pi 一升级这个值就变 */
+function piVersion(): string | null {
+	try {
+		const req = createRequire(import.meta.url);
+		let dir = dirname(req.resolve("@earendil-works/pi-coding-agent"));
+		for (let i = 0; i < 6; i += 1) {
+			const candidate = join(dir, "package.json");
+			if (existsSync(candidate)) {
+				const pkg = JSON.parse(readFileSync(candidate, "utf8")) as { name?: string; version?: string };
+				if (pkg.name === "@earendil-works/pi-coding-agent" && pkg.version) return pkg.version;
+			}
+			dir = dirname(dir);
+		}
+	} catch {
+		// 解析不到就当没有版本，下次会话还会再试
+	}
+	return null;
 }
 
 type ShellResultEvent = BashToolResultEvent | PowerShellToolResultEvent;
@@ -190,6 +224,28 @@ function sliceResultEvent(event: ShellResultEvent): { content: ShellResultEvent[
 }
 
 export default function (pi: ExtensionAPI) {
+	// 切片靠 tool_result 钩子的签名/事件形状，pi 一升级就可能静默失效。
+	// 每次开新会话跑一次自检（微秒级开销），失败且毛病没变才通知，避免反复喊。
+	pi.on("session_start", async (_event, ctx) => {
+		// 自检会走 sliceResultEvent，别把这几次算进本会话用量
+		const before = { fired, savedBytes, lastStats };
+		const report = selftest();
+		fired = before.fired;
+		savedBytes = before.savedBytes;
+		lastStats = before.lastStats;
+
+		const state = readState();
+		const version = piVersion();
+		if (!report.startsWith("selftest FAIL")) {
+			// 自愈了就清掉标记，下次再坏会重新提醒
+			if (state.lastFailSignature) patchState({ lastFailSignature: undefined, lastPiVersion: version ?? state.lastPiVersion });
+			return;
+		}
+		if (state.lastFailSignature === report) return;
+		patchState({ lastFailSignature: report, lastPiVersion: version ?? state.lastPiVersion });
+		ctx.ui.notify(`bash-slice 自检没过，终端输出切片可能已静默失效${version ? `（pi ${version}）` : ""}：\n${report}`, "error");
+	});
+
 	pi.on("tool_result", async (event) => {
 		if (!isBashToolResult(event) && !isPowerShellToolResult(event)) return;
 		return sliceResultEvent(event);
